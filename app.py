@@ -1,12 +1,16 @@
+from datetime import datetime
+from uuid import uuid4
+
 import streamlit as st
 from langchain.agents import create_agent
+from langchain.messages import AIMessage, HumanMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain.messages import HumanMessage, AIMessage
-from uuid import uuid4
+
+from agent import llm_stream, stream_llm_rag_response
 
 # import rag functions
 from rag import load_doc_to_db
-from agent import llm_stream, stream_llm_rag_response
+from tools import calculate, search
 
 st.set_page_config(page_title="DocuChat", page_icon="📄")
 
@@ -40,18 +44,35 @@ if not gemini_api_key:
 else:
     st.session_state.gemini_api_key = gemini_api_key
 
-    # TODO: Generar agente
     model = ChatGoogleGenerativeAI(
         model="gemini-2.5-flash",
         temperature=1.0,  # Gemini 3.0+ defaults to 1.0
         max_tokens=None,
         timeout=None,
         max_retries=2,
-        api_key=gemini_api_key
+        api_key=gemini_api_key,
     )
-    agent = create_agent(model)
-    
-    
+
+    current_date = datetime.now().strftime("%d de %B de %Y")
+
+    agent = create_agent(
+        model,
+        tools=[search, calculate],
+        system_prompt=f"""Eres DocuChat, un asistente inteligente que ayuda a los usuarios.
+
+        INFORMACIÓN TEMPORAL IMPORTANTE:
+        - Fecha actual: {current_date}
+
+        Tienes acceso a las siguientes herramientas:
+        1. search: Para buscar información actualizada en internet
+        2. calculate: Para realizar cálculos matemáticos
+
+        INSTRUCCIONES IMPORTANTES:
+        - Cuando uses la herramienta de búsqueda, los resultados son ACTUALES y corresponden a {current_date}
+        - Responde de manera clara y útil usando Markdown cuando sea apropiado
+        - Si no estás seguro de algo, usa la herramienta de búsqueda para verificar""",
+    )
+
     with st.sidebar:
         uploaded_files = st.file_uploader(
             "Sube un documento",
@@ -61,7 +82,9 @@ else:
             key="rag_docs",
         )
 
-        is_vector_db_loaded = ("vector_db" in st.session_state and st.session_state.vector_db is not None)
+        is_vector_db_loaded = (
+            "vector_db" in st.session_state and st.session_state.vector_db is not None
+        )
         st.toggle(
             "Use RAG",
             value=is_vector_db_loaded,
@@ -92,16 +115,19 @@ else:
 
     if prompt := st.chat_input("Escribe aqui tu mensaje"):
         st.session_state.messages.append({"role": "user", "content": prompt})
-        
+
         with st.chat_message("user"):
             st.markdown(prompt)
-            
+
         with st.chat_message("assistant"):
             # changing format to langchain format
             messages = [
-                HumanMessage(content=m["content"]) if m["role"]== "user" else AIMessage(content=m["content"]) for m in st.session_state.messages
+                HumanMessage(content=m["content"])
+                if m["role"] == "user"
+                else AIMessage(content=m["content"])
+                for m in st.session_state.messages
             ]
-            
+
             try:
                 if not st.session_state.use_rag:
                     st.write_stream(llm_stream(agent, messages))
@@ -109,4 +135,3 @@ else:
                     st.write_stream(stream_llm_rag_response(model, messages))
             except Exception as e:
                 st.error(f"Error: {e}")
-           
